@@ -368,6 +368,7 @@ llama_build_and_test(test-tiled-mulmat.cpp  LABEL "main behavior backend"  LINK 
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model behavior")
 llama_build_and_test(test-autorelease.cpp       LABEL "model behavior")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model behavior backend")
+llama_build_and_test(test-mmvq-row-faithful.cpp LABEL "model behavior backend" LINK ggml)
 
 if (APPLE)
     llama_build(test-rset-release.cpp)

@@ -316,6 +316,14 @@ int get_mmvq_mmid_max_batch(ggml_type type, int cc) {
     return MMVQ_MAX_BATCH_SIZE;
 }
 
+static bool mmvq_row_faithful_enabled() {
+    static int row_faithful = -1;
+    if (row_faithful < 0) {
+        row_faithful = getenv("GGML_CUDA_MMVQ_ROW_FAITHFUL") != nullptr ? 1 : 0;
+    }
+    return row_faithful == 1;
+}
+
 bool ggml_cuda_should_use_mmvq(enum ggml_type type, int cc, int64_t ne11) {
     if (!ggml_is_quantized(type)) {
         return false;
@@ -337,11 +345,11 @@ bool ggml_cuda_should_use_mmvq(enum ggml_type type, int cc, int64_t ne11) {
             case GGML_TYPE_Q2_K:
             case GGML_TYPE_Q3_K:
             case GGML_TYPE_Q4_K:
-                return ne11 <= 5;
+                return ne11 <= (mmvq_row_faithful_enabled() ? 8 : 5);
             case GGML_TYPE_Q5_K:
-                return ne11 <= 6;
+                return ne11 <= (mmvq_row_faithful_enabled() ? 8 : 6);
             case GGML_TYPE_Q6_K:
-                return ne11 <= 7;
+                return ne11 <= (mmvq_row_faithful_enabled() ? 8 : 7);
             default:
                 return ne11 <= MMVQ_MAX_BATCH_SIZE;
         }
@@ -1580,6 +1588,26 @@ void ggml_cuda_mul_mat_vec_q(
 
     const int64_t ids_stride = ids ? ids->nb[1] / ggml_type_size(ids->type) : 0;
 
+    // Opt-in row-faithful small-batch mode: batches of 5..8 activation
+    // columns are split into launches of at most 4 columns, the width
+    // band where the per-ncols MMVQ instantiations are row-faithful to
+    // the M=1 path. Weight reuse is preserved within each launch.
+    if (!ids && mmvq_row_faithful_enabled() && ncols_dst > 4 && ncols_dst <= MMVQ_MAX_BATCH_SIZE) {
+        const int64_t first = 4;
+        const int64_t rest  = ncols_dst - first;
+        mul_mat_vec_q_switch_type(
+            src0->data, src0->type, src1_q8_1.get(), ids_d, fusion_local, dst_d, ne00,
+            ne01,              first,         s01, stride_col_y,     stride_col_dst,
+            ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
+            ne03,              ne3,           s03, s13,              s3,               ids_stride, stream);
+        mul_mat_vec_q_switch_type(
+            src0->data, src0->type, (const char *) src1_q8_1.get() + first*stride_col_y*sizeof(block_q8_1),
+            ids_d, fusion_local, dst_d + first*stride_col_dst, ne00,
+            ne01,              rest,          s01, stride_col_y,     stride_col_dst,
+            ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
+            ne03,              ne3,           s03, s13,              s3,               ids_stride, stream);
+        return;
+    }
     mul_mat_vec_q_switch_type(
         src0->data, src0->type, src1_q8_1.get(), ids_d, fusion_local, dst_d, ne00,
         ne01,              ncols_dst,     s01, stride_col_y,     stride_col_dst,

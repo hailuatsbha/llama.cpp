@@ -1,5 +1,13 @@
 #include "common.cuh"
 #include "fattn-common.cuh"
+
+static bool fatt_row_faithful_enabled() {
+    static int row_faithful = -1;
+    if (row_faithful < 0) {
+        row_faithful = getenv("GGML_CUDA_FATTN_ROW_FAITHFUL") != nullptr ? 1 : 0;
+    }
+    return row_faithful == 1;
+}
 #include "fattn-mma-f16.cuh"
 #include "fattn-tile.cuh"
 #include "fattn-vec.cuh"
@@ -673,7 +681,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
                 const bool sparse_decode = gqa_opt_applies && gqa_ratio > 4 &&
                     ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(K->ne[0], V->ne[0], 1, 8) &&
                     ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, 1, 8);
-                if (!sparse_decode && cc >= GGML_CUDA_CC_ADA_LOVELACE && Q->ne[1] == 1 && Q->ne[3] == 1 &&
+                if (!sparse_decode && fatt_row_faithful_enabled() && cc >= GGML_CUDA_CC_ADA_LOVELACE && Q->ne[1] <= 8 && Q->ne[3] == 1 &&
                         !(gqa_ratio > 4 && (Q->ne[0] >= 256 || K->ne[1] >= 8192))) {
                     return BEST_FATTN_KERNEL_VEC;
                 }
